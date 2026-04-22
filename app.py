@@ -8,7 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from llm import parse_map_intent, refine_layer_query
-from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson
+from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson, resolve_user_url
 from map_builder import build_map, map_to_html, assign_layer_colors, LAYER_COLORS, default_style_config, get_numeric_fields, get_all_fields, COLOR_RAMPS, FLOOD_ZONE_COLORS
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
@@ -122,6 +122,20 @@ with st.sidebar:
     )
 
     zoom_level = st.slider("Default zoom", min_value=7, max_value=14, value=10)
+
+    st.divider()
+
+    st.markdown("### 🔗 Add Layers by URL")
+    st.caption("Paste any ArcGIS FeatureServer or MapServer layer URL. One per line.")
+    user_urls_raw = st.text_area(
+        "Layer URLs",
+        value=st.session_state.get("user_urls_raw", ""),
+        placeholder="https://services6.arcgis.com/.../FeatureServer/1",
+        height=100,
+        key="user_urls_input",
+        label_visibility="collapsed",
+    )
+    st.session_state["user_urls_raw"] = user_urls_raw
 
     st.divider()
 
@@ -466,6 +480,49 @@ if run_btn and prompt.strip():
     # ── Step 3: Find layers ───────────────────────────────────────────────────
     resolved_layers = []
     layer_sources = []
+
+    # ── Resolve user-supplied URLs first ─────────────────────────────────────
+    user_url_candidates = {}   # label → candidate dict
+    user_urls_raw = st.session_state.get("user_urls_raw", "")
+    if user_urls_raw.strip():
+        for raw in user_urls_raw.strip().splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            with st.status(f"🔗 Resolving URL: {raw[:60]}...", expanded=False) as url_status:
+                candidate = resolve_user_url(raw)
+                if candidate:
+                    label = candidate["title"]
+                    user_url_candidates[label] = candidate
+                    url_status.update(label=f"✅ {label}", state="complete")
+                else:
+                    url_status.update(label=f"⚠️ Could not resolve: {raw[:50]}", state="complete")
+
+    # Add user URL layers directly to resolved_layers (bypass LLM layer matching)
+    for label, candidate in user_url_candidates.items():
+        color = LAYER_COLORS[len(resolved_layers) % len(LAYER_COLORS)]
+        gj = fetch_geojson(candidate["query_url"], bbox=geo_info["bbox"])
+        if gj and gj.get("features"):
+            resolved_layers.append({
+                "title": candidate["title"],
+                "layer_label": label,
+                "geojson": gj,
+                "geometry_type": candidate.get("geometry_type", "esriGeometryPolygon"),
+                "color": color,
+                "url": candidate["query_url"],
+                "item_url": "",
+                "owner": "user-supplied",
+                "snippet": candidate.get("snippet", ""),
+            })
+            layer_sources.append({
+                "layer": label,
+                "found": True,
+                "title": candidate["title"],
+                "owner": "user-supplied",
+                "item_url": "",
+                "feat_count": len(gj.get("features", [])),
+            })
+            color_map[label] = color
 
     for layer_name in intent["layers"]:
         color = color_map.get(layer_name, "#2196F3")

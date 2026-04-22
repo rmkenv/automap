@@ -360,3 +360,60 @@ def get_layer_info(query_url: str) -> Optional[dict]:
         }
     except Exception:
         return None
+
+
+# ─── User-supplied URL resolver ───────────────────────────────────────────────
+
+def resolve_user_url(raw_url: str) -> Optional[dict]:
+    """
+    Accept any ArcGIS REST URL a user pastes and return a normalised candidate dict.
+    Handles:
+      - .../FeatureServer              → appends /0/query
+      - .../FeatureServer/1            → appends /query
+      - .../FeatureServer/1/query      → used as-is
+      - .../MapServer                  → appends /0/query
+      - .../MapServer/28               → appends /query
+      - .../MapServer/28/query         → used as-is
+      - URLs with ?f=pjson or other params → strips params first
+    Returns a candidate dict compatible with the rest of the pipeline, or None.
+    """
+    # Strip query params
+    url = raw_url.strip().split("?")[0].rstrip("/")
+
+    # Already ends in /query
+    if url.endswith("/query"):
+        query_url = url
+    else:
+        # Check if last segment is a layer index (digit)
+        parts = url.split("/")
+        last = parts[-1]
+        if last.isdigit():
+            query_url = url + "/query"
+        elif any(svc in url for svc in ("FeatureServer", "MapServer")):
+            # Bare service root — append /0/query
+            query_url = url + "/0/query"
+        else:
+            return None
+
+    # Validate by fetching metadata
+    info = get_layer_info(query_url)
+    if info is None:
+        return None
+
+    # Derive a display title from the URL
+    parts = query_url.rstrip("/query").split("/")
+    title = info.get("name") or "/".join(parts[-3:])
+
+    return {
+        "title": title or "Custom Layer",
+        "query_url": query_url,
+        "item_url": "",
+        "owner": "user-supplied",
+        "views": 0,
+        "auth_score": 0,
+        "sr": "4326",   # fetch_geojson auto-detects; this is just a fallback hint
+        "source": "user_url",
+        "geometry_type": info.get("geometry_type", "esriGeometryPolygon"),
+        "fields": info.get("fields", []),
+        "snippet": f"User-supplied layer: {query_url}",
+    }
