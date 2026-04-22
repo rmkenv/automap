@@ -36,6 +36,28 @@ Respond ONLY with valid JSON, no preamble, no markdown, no explanation. Example:
   "notes": "highlight areas with high flood risk"
 }"""
 
+# JSON Schema for Ollama structured outputs
+INTENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "geography": {"type": "string"},
+        "layers": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 4,
+        },
+        "basemap": {
+            "type": "string",
+            "enum": ["streets", "satellite", "topo", "light", "dark"],
+        },
+        "notes": {"type": ["string", "null"]},
+    },
+    "required": ["geography", "layers", "basemap"],
+}
+
+VALID_BASEMAPS = {"streets", "satellite", "topo", "light", "dark"}
+
 
 def parse_map_intent(user_description: str, model: str = "gpt-oss:120b") -> dict:
     """
@@ -51,33 +73,63 @@ def parse_map_intent(user_description: str, model: str = "gpt-oss:120b") -> dict
     client = get_ollama_client()
 
     messages = [
+        {"role": "system", "content": INTENT_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": f"Parse this map request into JSON:\n\n{user_description}",
-        }
+        },
     ]
 
-    response = client.chat(
-        model=model,
-        messages=messages,
-        options={"temperature": 0.1},  # Low temp for structured output
-    )
+    # Try with structured output format first (guarantees schema)
+    try:
+        response = client.chat(
+            model=model,
+            messages=messages,
+            format=INTENT_SCHEMA,
+            options={"temperature": 0.1},
+        )
+    except Exception:
+        # Fall back to plain chat if model doesn't support format param
+        response = client.chat(
+            model=model,
+            messages=messages,
+            options={"temperature": 0.1},
+        )
 
     raw = response["message"]["content"].strip()
 
-    # Strip markdown fences if model added them
+    # Strip markdown fences if model added them anyway
     raw = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
 
     try:
         intent = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise ValueError(f"LLM returned unparseable JSON: {raw}\n\nError: {e}")
+        raise ValueError(f"LLM returned unparseable JSON:\n{raw}\n\nError: {e}")
 
-    # Normalize fields
-    intent.setdefault("basemap", "streets")
+    # ── Validate and normalize required fields ────────────────────────────────
+
+    # geography
+    if not intent.get("geography"):
+        raise ValueError(f"LLM response missing 'geography' field. Raw: {raw}")
+
+    # layers — must be a non-empty list
+    layers = intent.get("layers")
+    if not layers:
+        raise ValueError(f"LLM response missing 'layers' field. Raw: {raw}")
+    if isinstance(layers, str):
+        layers = [layers]
+    if not isinstance(layers, list) or len(layers) == 0:
+        raise ValueError(f"'layers' must be a non-empty list. Got: {layers}")
+    intent["layers"] = [str(l).strip() for l in layers if l]
+
+    # basemap — default if missing or invalid
+    basemap = intent.get("basemap", "streets")
+    if basemap not in VALID_BASEMAPS:
+        basemap = "streets"
+    intent["basemap"] = basemap
+
+    # notes — optional
     intent.setdefault("notes", None)
-    if isinstance(intent.get("layers"), str):
-        intent["layers"] = [intent["layers"]]
 
     return intent
 
