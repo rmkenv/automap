@@ -44,25 +44,24 @@ KNOWN_LAYERS = {
         ),
     ],
     "flood zones": [
-        # FEMA NFHL — correct arcgis path, layer 28 = Flood Hazard Zones
         (
-            "FEMA National Flood Hazard Layer",
-            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
-            "102100",
+            "FEMA Flood Zones (FloodZones FeatureServer)",
+            "https://services6.arcgis.com/am689ZyfXfdo9vCK/arcgis/rest/services/Flooding/FeatureServer/1/query",
+            "4326",
         ),
     ],
     "fema flood zones": [
         (
-            "FEMA National Flood Hazard Layer",
-            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
-            "102100",
+            "FEMA Flood Zones (FloodZones FeatureServer)",
+            "https://services6.arcgis.com/am689ZyfXfdo9vCK/arcgis/rest/services/Flooding/FeatureServer/1/query",
+            "4326",
         ),
     ],
     "fema flood": [
         (
-            "FEMA National Flood Hazard Layer",
-            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
-            "102100",
+            "FEMA Flood Zones (FloodZones FeatureServer)",
+            "https://services6.arcgis.com/am689ZyfXfdo9vCK/arcgis/rest/services/Flooding/FeatureServer/1/query",
+            "4326",
         ),
     ],
     "hospitals": [

@@ -48,6 +48,39 @@ COLOR_RAMPS = {
     "Grays":    ["#f7f7f7", "#cccccc", "#969696", "#636363", "#252525"],
 }
 
+# ─── Categorical color maps for known fields ──────────────────────────────────
+
+FLOOD_ZONE_COLORS = {
+    "AE":                              "#00a8e8",   # blue  — 1% annual chance w/ BFE
+    "A":                               "#5bc8f5",   # light blue — 1% annual chance
+    "AO":                              "#0077b6",   # dark blue — shallow flooding
+    "AH":                              "#48cae4",
+    "VE":                              "#023e8a",   # coastal high-hazard
+    "V":                               "#0096c7",
+    "0.2 PCT ANNUAL CHANCE FLOOD HAZARD": "#f4d03f", # yellow — 0.2%
+    "X PROTECTED BY LEVEE":            "#a9cce3",   # light — levee-protected
+    "X":                               "#d5e8d4",   # outside 500yr
+    "D":                               "#e8d5b7",   # undetermined
+}
+
+SFHA_COLORS = {"T": "#e63946", "F": "#a8dadc"}   # Special Flood Hazard Area T/F
+
+
+def _unique_value_style_fn(geojson: dict, field: str, color_map: dict, default_color: str, opacity: float, stroke_color: str, stroke_weight: float):
+    """Style function that colors features by a categorical field value."""
+    def _style(feature):
+        val = str((feature.get("properties") or {}).get(field, "")).strip()
+        fill = color_map.get(val, default_color)
+        return {
+            "fillColor": fill,
+            "color": stroke_color,
+            "weight": stroke_weight,
+            "fillOpacity": opacity,
+            "opacity": 1.0,
+        }
+    return _style
+
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -139,15 +172,26 @@ def default_style_config(layer: dict, index: int) -> dict:
     """Return a default style config dict for a layer."""
     geo_type = layer.get("geometry_type", "").lower()
     is_point = "point" in geo_type
+    geojson = layer.get("geojson", {})
+    fields = get_all_fields(geojson)
+
+    # Auto-detect flood zone layer → default to unique-value mode on FLD_ZONE
+    mode = "flat"
+    uv_field = None
+    if "FLD_ZONE" in fields:
+        mode = "unique_value"
+        uv_field = "FLD_ZONE"
+
     return {
-        "mode": "flat",                                    # "flat" or "choropleth"
-        "color": LAYER_COLORS[index % len(LAYER_COLORS)], # flat fill color
-        "opacity": 0.35 if not is_point else 0.8,
-        "stroke_color": "#333333",
-        "stroke_weight": 1.0,
+        "mode": mode,
+        "color": LAYER_COLORS[index % len(LAYER_COLORS)],
+        "opacity": 0.5 if not is_point else 0.8,
+        "stroke_color": "#555555",
+        "stroke_weight": 0.5,
         "point_radius": 6,
         "choropleth_field": None,
         "choropleth_ramp": "Blues",
+        "unique_value_field": uv_field,
     }
 
 
@@ -192,7 +236,27 @@ def build_map(
         if style_configs and title in style_configs:
             cfg.update(style_configs[title])
 
-        if cfg["mode"] == "choropleth" and cfg.get("choropleth_field"):
+        if cfg["mode"] == "unique_value" and cfg.get("unique_value_field"):
+            uv_field = cfg["unique_value_field"]
+            # Use FLOOD_ZONE_COLORS if field is FLD_ZONE, else build from LAYER_COLORS
+            if uv_field == "FLD_ZONE":
+                cmap = FLOOD_ZONE_COLORS
+            else:
+                vals = list({(f.get("properties") or {}).get(uv_field, "") for f in geojson.get("features", [])})
+                cmap = {v: LAYER_COLORS[i % len(LAYER_COLORS)] for i, v in enumerate(vals)}
+            style_fn = _unique_value_style_fn(
+                geojson, uv_field, cmap,
+                cfg.get("color", "#aaaaaa"),
+                cfg["opacity"], cfg["stroke_color"], cfg["stroke_weight"],
+            )
+            folium.GeoJson(
+                geojson,
+                name=title,
+                style_function=style_fn,
+                tooltip=folium.GeoJsonTooltip(fields=tooltip_fields, sticky=False) if tooltip_fields else None,
+            ).add_to(m)
+
+        elif cfg["mode"] == "choropleth" and cfg.get("choropleth_field"):
             ramp = COLOR_RAMPS.get(cfg["choropleth_ramp"], COLOR_RAMPS["Blues"])
             style_fn = _choropleth_style_fn(
                 geojson,

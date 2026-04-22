@@ -9,7 +9,7 @@ import streamlit.components.v1 as components
 
 from llm import parse_map_intent, refine_layer_query
 from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson
-from map_builder import build_map, map_to_html, assign_layer_colors, LAYER_COLORS, default_style_config, get_numeric_fields, get_all_fields, COLOR_RAMPS
+from map_builder import build_map, map_to_html, assign_layer_colors, LAYER_COLORS, default_style_config, get_numeric_fields, get_all_fields, COLOR_RAMPS, FLOOD_ZONE_COLORS
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
 
@@ -284,6 +284,59 @@ def _render_map_and_controls(map_html: str, zoom_level: int):
                     "stroke_color": new_stroke_color,
                     "stroke_weight": new_weight,
                     "point_radius": new_radius,
+                    "choropleth_field": cfg.get("choropleth_field"),
+                    "choropleth_ramp": cfg.get("choropleth_ramp", "Blues"),
+                }
+
+            elif new_mode == "unique_value":
+                all_str_fields = [k for k, v in (geojson.get("features") or [{}])[0].get("properties", {}).items()
+                                  if isinstance(v, str)] if geojson.get("features") else []
+                cur_uv_field = cfg.get("unique_value_field") or (all_str_fields[0] if all_str_fields else None)
+                uv_field_idx = all_str_fields.index(cur_uv_field) if cur_uv_field in all_str_fields else 0
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_uv_field = st.selectbox(
+                        "Color by category field", all_str_fields,
+                        index=uv_field_idx, key=f"uvfield_{title}",
+                    )
+                with col2:
+                    new_opacity = st.slider(
+                        "Fill opacity", 0.0, 1.0,
+                        value=float(cfg.get("opacity", 0.6)), step=0.05,
+                        key=f"opacity_{title}",
+                    )
+
+                col3, col4 = st.columns(2)
+                with col3:
+                    new_stroke_color = st.color_picker(
+                        "Stroke color", value=cfg.get("stroke_color", "#555555"),
+                        key=f"stroke_{title}",
+                    )
+                with col4:
+                    new_weight = st.slider(
+                        "Stroke weight", 0.0, 5.0,
+                        value=float(cfg.get("stroke_weight", 0.5)), step=0.5,
+                        key=f"weight_{title}",
+                    )
+
+                # Show current value → color preview if FLD_ZONE
+                if new_uv_field == "FLD_ZONE":
+                    st.markdown("**Zone colors:**")
+                    preview_html = " ".join(
+                        f'<span style="background:{c};color:white;padding:2px 8px;border-radius:3px;font-size:0.75rem;margin:2px;display:inline-block">{z}</span>'
+                        for z, c in FLOOD_ZONE_COLORS.items()
+                    )
+                    st.markdown(preview_html, unsafe_allow_html=True)
+
+                updated_configs[title] = {
+                    "mode": "unique_value",
+                    "unique_value_field": new_uv_field,
+                    "opacity": new_opacity,
+                    "stroke_color": new_stroke_color,
+                    "stroke_weight": new_weight,
+                    "color": cfg.get("color", LAYER_COLORS[i % len(LAYER_COLORS)]),
+                    "point_radius": cfg.get("point_radius", 6),
                     "choropleth_field": cfg.get("choropleth_field"),
                     "choropleth_ramp": cfg.get("choropleth_ramp", "Blues"),
                 }
