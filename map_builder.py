@@ -1,97 +1,171 @@
 """
-map_builder.py — Folium map assembly
-Constructs an interactive map from resolved layers and geocoded extent.
+map_builder.py — Folium map assembly with per-layer style control
 """
 
 import folium
-import random
+import colorsys
 from folium.plugins import Fullscreen, MiniMap
 from typing import Optional
 
-
-# ─── Basemap Configs ──────────────────────────────────────────────────────────
+# ─── Basemaps ─────────────────────────────────────────────────────────────────
 
 BASEMAPS = {
     "streets": {
         "tiles": "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
         "attr": "© OpenStreetMap contributors © CARTO",
-        "name": "Streets",
     },
     "satellite": {
         "tiles": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         "attr": "© Esri, Maxar, GeoEye, Earthstar Geographics",
-        "name": "Satellite",
     },
     "topo": {
         "tiles": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
         "attr": "© OpenStreetMap contributors, SRTM | © OpenTopoMap",
-        "name": "Topographic",
     },
     "light": {
         "tiles": "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
         "attr": "© OpenStreetMap contributors © CARTO",
-        "name": "Light",
     },
     "dark": {
         "tiles": "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
         "attr": "© OpenStreetMap contributors © CARTO",
-        "name": "Dark",
     },
 }
 
-# Distinct colors for multiple layers
-LAYER_COLORS = [
-    "#E63946",  # red
-    "#2196F3",  # blue
-    "#4CAF50",  # green
-    "#FF9800",  # orange
-    "#9C27B0",  # purple
-    "#00BCD4",  # cyan
-]
+LAYER_COLORS = ["#E63946", "#2196F3", "#4CAF50", "#FF9800", "#9C27B0", "#00BCD4"]
+
+# ─── Color ramp palettes ──────────────────────────────────────────────────────
+
+COLOR_RAMPS = {
+    "Blues":    ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"],
+    "Reds":     ["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d", "#67000d"],
+    "Greens":   ["#f7fcf5", "#c7e9c0", "#74c476", "#238b45", "#00441b"],
+    "Oranges":  ["#fff5eb", "#fdd0a2", "#fd8d3c", "#d94801", "#7f2704"],
+    "Purples":  ["#fcfbfd", "#dadaeb", "#9e9ac8", "#6a51a3", "#3f007d"],
+    "YlOrRd":   ["#ffffb2", "#fecc5c", "#fd8d3c", "#f03b20", "#bd0026"],
+    "RdYlGn":   ["#d73027", "#fc8d59", "#ffffbf", "#91cf60", "#1a9850"],
+    "Viridis":  ["#440154", "#3b528b", "#21908c", "#5dc963", "#fde725"],
+    "Grays":    ["#f7f7f7", "#cccccc", "#969696", "#636363", "#252525"],
+}
 
 
-def get_layer_style(color: str, geometry_type: str) -> dict:
-    """Return a Folium GeoJSON style function config."""
-    if "point" in geometry_type.lower() or "esriGeometryPoint" in geometry_type:
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def get_numeric_fields(geojson: dict) -> list[str]:
+    """Return all numeric property fields from a GeoJSON layer."""
+    features = geojson.get("features", [])
+    if not features:
+        return []
+    props = features[0].get("properties", {}) or {}
+    return [k for k, v in props.items() if isinstance(v, (int, float)) and v is not None]
+
+
+def get_all_fields(geojson: dict) -> list[str]:
+    """Return all property fields from a GeoJSON layer."""
+    features = geojson.get("features", [])
+    if not features:
+        return []
+    props = features[0].get("properties", {}) or {}
+    return list(props.keys())
+
+
+def _safe_tooltip_fields(geojson: dict, max_fields: int = 5) -> list[str]:
+    features = geojson.get("features", [])
+    if not features:
+        return []
+    props = features[0].get("properties", {}) or {}
+    fields = []
+    for k, v in props.items():
+        if v is not None and isinstance(v, (str, int, float)):
+            fields.append(k)
+        if len(fields) >= max_fields:
+            break
+    return fields
+
+
+def _interpolate_color(t: float, ramp: list[str]) -> str:
+    """Interpolate a hex color along a ramp (t in [0,1])."""
+    if len(ramp) == 1:
+        return ramp[0]
+    n = len(ramp) - 1
+    i = min(int(t * n), n - 1)
+    lo, hi = ramp[i], ramp[i + 1]
+    lt = (t * n) - i
+
+    def hex_to_rgb(h):
+        h = h.lstrip("#")
+        return tuple(int(h[j:j+2], 16) / 255 for j in (0, 2, 4))
+
+    def rgb_to_hex(r, g, b):
+        return "#{:02x}{:02x}{:02x}".format(int(r*255), int(g*255), int(b*255))
+
+    r0, g0, b0 = hex_to_rgb(lo)
+    r1, g1, b1 = hex_to_rgb(hi)
+    return rgb_to_hex(r0 + (r1-r0)*lt, g0 + (g1-g0)*lt, b0 + (b1-b0)*lt)
+
+
+def _choropleth_style_fn(geojson: dict, field: str, ramp: list[str], opacity: float, stroke_color: str, stroke_weight: float):
+    """Return a Folium style_function that colors features by a numeric field."""
+    values = []
+    for f in geojson.get("features", []):
+        v = (f.get("properties") or {}).get(field)
+        if isinstance(v, (int, float)):
+            values.append(v)
+
+    if not values:
+        def _flat(feature):
+            return {"fillColor": ramp[-1], "color": stroke_color, "weight": stroke_weight, "fillOpacity": opacity}
+        return _flat
+
+    vmin, vmax = min(values), max(values)
+    span = vmax - vmin or 1
+
+    def _style(feature):
+        v = (feature.get("properties") or {}).get(field, vmin)
+        t = (v - vmin) / span if isinstance(v, (int, float)) else 0
         return {
-            "fillColor": color,
-            "color": "#ffffff",
-            "weight": 1,
-            "fillOpacity": 0.8,
-            "radius": 6,
+            "fillColor": _interpolate_color(t, ramp),
+            "color": stroke_color,
+            "weight": stroke_weight,
+            "fillOpacity": opacity,
+            "opacity": 1.0,
         }
-    else:
-        return {
-            "fillColor": color,
-            "color": color,
-            "weight": 1.5,
-            "fillOpacity": 0.25,
-            "opacity": 0.85,
-        }
+    return _style
 
+
+# ─── Default style config ─────────────────────────────────────────────────────
+
+def default_style_config(layer: dict, index: int) -> dict:
+    """Return a default style config dict for a layer."""
+    geo_type = layer.get("geometry_type", "").lower()
+    is_point = "point" in geo_type
+    return {
+        "mode": "flat",                                    # "flat" or "choropleth"
+        "color": LAYER_COLORS[index % len(LAYER_COLORS)], # flat fill color
+        "opacity": 0.35 if not is_point else 0.8,
+        "stroke_color": "#333333",
+        "stroke_weight": 1.0,
+        "point_radius": 6,
+        "choropleth_field": None,
+        "choropleth_ramp": "Blues",
+    }
+
+
+# ─── Map builder ─────────────────────────────────────────────────────────────
 
 def build_map(
     geo_info: dict,
-    layers: list[dict],  # [{"title", "geojson", "geometry_type", "color"}]
+    layers: list[dict],
     basemap_key: str = "light",
     zoom_start: int = 10,
+    style_configs: Optional[dict] = None,   # {layer_title: style_config_dict}
 ) -> folium.Map:
     """
-    Build a Folium map centered on the geocoded location with all resolved layers.
-
-    Args:
-        geo_info: Output from geocode_place() — has lat, lon, bbox, display_name
-        layers: List of resolved layer dicts with GeoJSON data
-        basemap_key: One of BASEMAPS keys
-        zoom_start: Initial zoom level
-
-    Returns:
-        folium.Map instance
+    Build a Folium map. style_configs overrides per-layer defaults.
     """
     lat, lon = geo_info["lat"], geo_info["lon"]
     basemap = BASEMAPS.get(basemap_key, BASEMAPS["light"])
 
-    # Build base map
     m = folium.Map(
         location=[lat, lon],
         zoom_start=zoom_start,
@@ -100,53 +174,73 @@ def build_map(
         prefer_canvas=True,
     )
 
-    # Plugins
     Fullscreen(position="topright").add_to(m)
     MiniMap(toggle_display=True, position="bottomright").add_to(m)
 
-    # Add each layer
     for i, layer in enumerate(layers):
         if not layer.get("geojson"):
             continue
 
-        color = layer.get("color", LAYER_COLORS[i % len(LAYER_COLORS)])
-        geo_type = layer.get("geometry_type", "")
-        style = get_layer_style(color, geo_type)
         title = layer.get("title", f"Layer {i+1}")
+        geo_type = layer.get("geometry_type", "").lower()
+        is_point = "point" in geo_type
+        geojson = layer["geojson"]
+        tooltip_fields = _safe_tooltip_fields(geojson)
 
-        # Use CircleMarker for points, regular GeoJson for polys/lines
-        if "point" in geo_type.lower():
+        # Merge default + user overrides
+        cfg = default_style_config(layer, i)
+        if style_configs and title in style_configs:
+            cfg.update(style_configs[title])
+
+        if cfg["mode"] == "choropleth" and cfg.get("choropleth_field"):
+            ramp = COLOR_RAMPS.get(cfg["choropleth_ramp"], COLOR_RAMPS["Blues"])
+            style_fn = _choropleth_style_fn(
+                geojson,
+                cfg["choropleth_field"],
+                ramp,
+                cfg["opacity"],
+                cfg["stroke_color"],
+                cfg["stroke_weight"],
+            )
             folium.GeoJson(
-                layer["geojson"],
+                geojson,
                 name=title,
-                tooltip=folium.GeoJsonTooltip(
-                    fields=_safe_tooltip_fields(layer["geojson"]),
-                    sticky=False,
-                ),
+                style_function=style_fn,
+                tooltip=folium.GeoJsonTooltip(fields=tooltip_fields, sticky=False) if tooltip_fields else None,
+            ).add_to(m)
+
+        elif is_point:
+            folium.GeoJson(
+                geojson,
+                name=title,
+                tooltip=folium.GeoJsonTooltip(fields=tooltip_fields, sticky=False) if tooltip_fields else None,
                 marker=folium.CircleMarker(
-                    radius=style["radius"],
-                    fill_color=style["fillColor"],
-                    color=style["color"],
-                    fill_opacity=style["fillOpacity"],
-                    weight=style["weight"],
-                ),
-            ).add_to(m)
-        else:
-            folium.GeoJson(
-                layer["geojson"],
-                name=title,
-                style_function=lambda feature, s=style: s,
-                tooltip=folium.GeoJsonTooltip(
-                    fields=_safe_tooltip_fields(layer["geojson"]),
-                    sticky=False,
+                    radius=cfg["point_radius"],
+                    fill_color=cfg["color"],
+                    color=cfg["stroke_color"],
+                    fill_opacity=cfg["opacity"],
+                    weight=cfg["stroke_weight"],
                 ),
             ).add_to(m)
 
-    # Layer control if multiple layers
+        else:
+            flat_style = {
+                "fillColor": cfg["color"],
+                "color": cfg["stroke_color"],
+                "weight": cfg["stroke_weight"],
+                "fillOpacity": cfg["opacity"],
+                "opacity": 1.0,
+            }
+            folium.GeoJson(
+                geojson,
+                name=title,
+                style_function=lambda feature, s=flat_style: s,
+                tooltip=folium.GeoJsonTooltip(fields=tooltip_fields, sticky=False) if tooltip_fields else None,
+            ).add_to(m)
+
     if len(layers) > 1:
         folium.LayerControl(collapsed=False).add_to(m)
 
-    # Fit bounds to geography bbox
     bbox = geo_info.get("bbox")
     if bbox:
         minx, miny, maxx, maxy = bbox
@@ -155,31 +249,9 @@ def build_map(
     return m
 
 
-def _safe_tooltip_fields(geojson: dict) -> list[str]:
-    """Extract a safe subset of property fields for tooltips."""
-    features = geojson.get("features", [])
-    if not features:
-        return []
-
-    props = features[0].get("properties", {}) or {}
-    # Pick the first 4 non-null string/numeric fields
-    fields = []
-    for k, v in props.items():
-        if v is not None and isinstance(v, (str, int, float)):
-            fields.append(k)
-        if len(fields) >= 4:
-            break
-    return fields
-
-
 def map_to_html(m: folium.Map) -> str:
-    """Render a Folium map to an HTML string."""
     return m._repr_html_()
 
 
 def assign_layer_colors(layer_titles: list[str]) -> dict[str, str]:
-    """Assign a distinct color to each layer title."""
-    return {
-        title: LAYER_COLORS[i % len(LAYER_COLORS)]
-        for i, title in enumerate(layer_titles)
-    }
+    return {t: LAYER_COLORS[i % len(LAYER_COLORS)] for i, t in enumerate(layer_titles)}
