@@ -24,7 +24,7 @@ INTENT_SYSTEM_PROMPT = """You are a GIS assistant that parses natural language m
 
 Given a user's description of a map they want to build, extract:
 - geography: the place name or region (e.g. "Baltimore, MD", "Long Island, NY", "Cook County, IL")
-- layers: a list of 1-4 GIS layer types they want to see (e.g. ["census tracts", "FEMA flood zones", "hospitals"])
+- layers: REQUIRED non-empty list of 1-4 GIS layer types. If the user does not specify layers, choose 2 sensible defaults for that geography (e.g. ["census tracts", "counties"]). NEVER return an empty list.
 - basemap: one of: "streets", "satellite", "topo", "light", "dark" (default "streets")
 - notes: any special styling or filtering requests (optional, can be null)
 
@@ -33,7 +33,7 @@ Respond ONLY with valid JSON, no preamble, no markdown, no explanation. Example:
   "geography": "Baltimore, MD",
   "layers": ["census tracts", "flood zones"],
   "basemap": "light",
-  "notes": "highlight areas with high flood risk"
+  "notes": null
 }"""
 
 # JSON Schema for Ollama structured outputs
@@ -112,15 +112,18 @@ def parse_map_intent(user_description: str, model: str = "gpt-oss:120b") -> dict
     if not intent.get("geography"):
         raise ValueError(f"LLM response missing 'geography' field. Raw: {raw}")
 
-    # layers — must be a non-empty list
+    # layers — must be a non-empty list; if empty, infer a sensible default
     layers = intent.get("layers")
-    if not layers:
-        raise ValueError(f"LLM response missing 'layers' field. Raw: {raw}")
     if isinstance(layers, str):
         layers = [layers]
     if not isinstance(layers, list) or len(layers) == 0:
-        raise ValueError(f"'layers' must be a non-empty list. Got: {layers}")
-    intent["layers"] = [str(l).strip() for l in layers if l]
+        # LLM returned empty layers — infer from geography or use sensible defaults
+        geography = intent.get("geography", "").lower()
+        if any(w in geography for w in ["bay", "river", "creek", "flood", "water"]):
+            layers = ["flood zones", "counties"]
+        else:
+            layers = ["census tracts", "counties"]
+    intent["layers"] = [str(l).strip() for l in layers if str(l).strip()]
 
     # basemap — default if missing or invalid
     basemap = intent.get("basemap", "streets")

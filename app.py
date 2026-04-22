@@ -248,8 +248,12 @@ if run_btn and prompt.strip():
             layer_info = None
 
             for candidate in candidates:
-                info = get_layer_info(candidate["url"])
-                gj = fetch_geojson(candidate["url"], bbox=geo_info["bbox"])
+                info = get_layer_info(candidate["query_url"])
+                gj = fetch_geojson(
+                    candidate["query_url"],
+                    bbox=geo_info["bbox"],
+                    sr=candidate.get("sr", "4326"),
+                )
                 if gj and gj.get("features"):
                     geojson = gj
                     chosen = candidate
@@ -270,7 +274,7 @@ if run_btn and prompt.strip():
                 "geojson": geojson,
                 "geometry_type": geo_type,
                 "color": color,
-                "url": chosen["url"],
+                "url": chosen["query_url"],
                 "item_url": chosen.get("item_url", ""),
                 "owner": chosen.get("owner", ""),
                 "snippet": chosen.get("snippet", ""),
