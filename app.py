@@ -8,7 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from llm import parse_map_intent, refine_layer_query
-from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson, fetch_wfs_geojson, resolve_user_url
+from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson, fetch_wfs_geojson, fetch_esri_point_query, resolve_user_url
 from map_builder import build_map, map_to_html, assign_layer_colors, LAYER_COLORS, default_style_config, get_numeric_fields, get_all_fields, COLOR_RAMPS, FLOOD_ZONE_COLORS
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
@@ -136,21 +136,6 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     st.session_state["user_urls_raw"] = user_urls_raw
-
-    st.divider()
-
-    st.markdown("### 📋 Example Prompts")
-    examples = [
-        "Show me FEMA flood zones in Baltimore, MD",
-        "Show census tracts and counties in Washington, DC with a light basemap",
-        "Map flood zones and block groups in New Orleans, LA",
-        "Show census tracts in Chicago, IL with a dark basemap",
-        "Show FEMA flood zones and zip codes in Houston, TX",
-    ]
-    for ex in examples:
-        if st.button(ex, key=f"ex_{ex[:20]}", use_container_width=True):
-            st.session_state["prompt_input"] = ex
-            st.rerun()
 
     st.divider()
     st.caption("Data sourced from ArcGIS Online public layers.")
@@ -557,13 +542,21 @@ if run_btn and prompt.strip():
             layer_info = None
 
             for candidate in candidates:
-                if candidate.get("source_type") == "wfs":
+                source_type = candidate.get("source_type", "esri")
+                if source_type == "wfs":
                     gj = fetch_wfs_geojson(
                         candidate["query_url"],
                         bbox=geo_info["bbox"],
                         typename=candidate["wfs_typename"],
                     )
                     info = {"geometry_type": "esriGeometryPolygon", "fields": [], "name": candidate["title"]}
+                elif source_type == "esri_point":
+                    gj = fetch_esri_point_query(
+                        candidate["query_url"],
+                        lat=geo_info["lat"],
+                        lon=geo_info["lon"],
+                    )
+                    info = get_layer_info(candidate["query_url"]) or {"geometry_type": "esriGeometryPolygon", "fields": [], "name": candidate["title"]}
                 else:
                     info = get_layer_info(candidate["query_url"])
                     gj = fetch_geojson(
@@ -578,7 +571,43 @@ if run_btn and prompt.strip():
                     break
 
             if not geojson or not chosen:
-                status.update(label=f"⚠️ No data returned for '{layer_name}' — service may be down", state="complete")
+                status.update(label=f"⚠️ No data returned for '{layer_name}'", state="complete")
+                # Show debug info so user can see what failed
+                with st.expander(f"🔍 Debug: '{layer_name}' fetch attempts", expanded=True):
+                    for c in candidates:
+                        st.code(
+                            f"source_type : {c.get('source_type','esri')}\n"
+                            f"url         : {c.get('query_url','?')}\n"
+                            f"sr          : {c.get('sr','?')}",
+                            language="text"
+                        )
+                        # Do a raw request and show response
+                        import requests as _req
+                        try:
+                            if c.get("source_type") == "esri_point":
+                                test_params = {
+                                    "f": "json", "where": "1=1", "outFields": "OBJECTID",
+                                    "outSR": "4326", "returnGeometry": "false",
+                                    "geometry": f"{geo_info['lon']},{geo_info['lat']}",
+                                    "geometryType": "esriGeometryPoint",
+                                    "inSR": "4326",
+                                    "spatialRel": "esriSpatialRelIntersects",
+                                }
+                            else:
+                                minx, miny, maxx, maxy = geo_info["bbox"]
+                                test_params = {
+                                    "f": "json", "where": "1=1", "outFields": "OBJECTID",
+                                    "outSR": "4326", "returnGeometry": "false",
+                                    "geometry": f"{minx},{miny},{maxx},{maxy}",
+                                    "geometryType": "esriGeometryEnvelope",
+                                    "inSR": "4326",
+                                    "spatialRel": "esriSpatialRelIntersects",
+                                }
+                            r = _req.get(c["query_url"], params=test_params, timeout=15)
+                            st.write(f"HTTP {r.status_code}")
+                            st.code(r.text[:800], language="json")
+                        except Exception as ex:
+                            st.error(f"Request error: {ex}")
                 layer_sources.append({"layer": layer_name, "found": False, "title": candidates[0]["title"] if candidates else None})
                 continue
 

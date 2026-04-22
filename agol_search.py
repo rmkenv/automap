@@ -90,33 +90,76 @@ KNOWN_LAYERS = {
         ),
     ],
 
-    # ── FEMA NFHL REST (layer 28 = Flood Hazard Areas, point-intersect query) ──
+    # ── FEMA flood zones — multiple hosted mirrors, tried in order ───────────
+    # Primary: Esri Living Atlas hosted copy (no IP restrictions)
+    # Fallback 1: another public AGOL hosted copy
+    # Fallback 2: hazards.fema.gov direct (may block cloud IPs)
     "flood zones": [
         (
-            "FEMA NFHL Flood Hazard Areas",
+            "FEMA Flood Hazard Areas (Living Atlas)",
+            "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query",
+            "102100",
+        ),
+        (
+            "FEMA National Flood Hazard Layer (AGOL)",
+            "https://services.arcgis.com/2gdL2gxYNFY2TOUb/arcgis/rest/services/FEMA_National_Flood_Hazard_Layer/FeatureServer/0/query",
+            "4326",
+        ),
+        (
+            "FEMA Flood Hazard (AGOL hosted)",
+            "https://services5.arcgis.com/ul2HkPnjmlM1iEE4/ArcGIS/rest/services/FEMA_Flood_Hazard/FeatureServer/0/query",
+            "4326",
+        ),
+        (
+            "FEMA NFHL Direct",
             "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
-            "point:4326",   # use point query at centroid, service returns WGS84
+            "point:4326",
         ),
     ],
     "fema flood zones": [
         (
-            "FEMA NFHL Flood Hazard Areas",
+            "FEMA Flood Hazard Areas (Living Atlas)",
+            "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query",
+            "102100",
+        ),
+        (
+            "FEMA National Flood Hazard Layer (AGOL)",
+            "https://services.arcgis.com/2gdL2gxYNFY2TOUb/arcgis/rest/services/FEMA_National_Flood_Hazard_Layer/FeatureServer/0/query",
+            "4326",
+        ),
+        (
+            "FEMA NFHL Direct",
             "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
             "point:4326",
         ),
     ],
     "fema flood": [
         (
-            "FEMA NFHL Flood Hazard Areas",
+            "FEMA Flood Hazard Areas (Living Atlas)",
+            "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query",
+            "102100",
+        ),
+        (
+            "FEMA National Flood Hazard Layer (AGOL)",
+            "https://services.arcgis.com/2gdL2gxYNFY2TOUb/arcgis/rest/services/FEMA_National_Flood_Hazard_Layer/FeatureServer/0/query",
+            "4326",
+        ),
+        (
+            "FEMA NFHL Direct",
             "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
             "point:4326",
         ),
     ],
     "floodplain": [
         (
-            "FEMA NFHL Flood Hazard Areas",
-            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
-            "point:4326",
+            "FEMA Flood Hazard Areas (Living Atlas)",
+            "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query",
+            "102100",
+        ),
+        (
+            "FEMA National Flood Hazard Layer (AGOL)",
+            "https://services.arcgis.com/2gdL2gxYNFY2TOUb/arcgis/rest/services/FEMA_National_Flood_Hazard_Layer/FeatureServer/0/query",
+            "4326",
         ),
     ],
 }
