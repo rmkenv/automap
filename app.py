@@ -8,7 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from llm import parse_map_intent, refine_layer_query
-from agol_search import geocode_place, search_agol_layers, get_layer_info, fetch_geojson
+from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson
 from map_builder import build_map, map_to_html, assign_layer_colors, LAYER_COLORS
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ with st.sidebar:
     ]
     for ex in examples:
         if st.button(ex, key=f"ex_{ex[:20]}", use_container_width=True):
-            st.session_state["prompt"] = ex
+            st.session_state["prompt_input"] = ex
             st.rerun()
 
     st.divider()
@@ -151,9 +151,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if "prompt_input" not in st.session_state:
+    st.session_state["prompt_input"] = ""
+
 prompt = st.text_area(
     "What map do you want to build?",
-    value=st.session_state.get("prompt", ""),
     placeholder="e.g. Show me FEMA flood zones and census tracts in Baltimore, MD with a light basemap",
     key="prompt_input",
     height=80,
@@ -219,22 +221,24 @@ if run_btn and prompt.strip():
     for layer_name in intent["layers"]:
         color = color_map.get(layer_name, "#2196F3")
 
-        with st.status(f"🔍 Searching AGOL: '{layer_name}'...", expanded=False) as status:
-            # Get LLM-optimized query
-            try:
-                refined_query = refine_layer_query(layer_name, intent["geography"], model=model_choice)
-            except Exception:
-                refined_query = layer_name
+        with st.status(f"🔍 Finding layer: '{layer_name}'...", expanded=False) as status:
+            # Step 1: known catalog first (fast, reliable)
+            candidates = get_known_layer_candidates(layer_name)
 
-            # Search AGOL
-            candidates = search_agol_layers(
-                query=refined_query,
-                geography=intent["geography"],
-                max_results=max_results,
-            )
+            # Step 2: AGOL search fallback (with LLM-refined query, no geography appended)
+            if not candidates:
+                try:
+                    refined_query = refine_layer_query(layer_name, intent["geography"], model=model_choice)
+                except Exception:
+                    refined_query = layer_name
+                agol_candidates = search_agol_layers(
+                    query=refined_query,
+                    max_results=max_results,
+                )
+                candidates = agol_candidates
 
             if not candidates:
-                status.update(label=f"⚠️ No results for '{layer_name}'", state="complete")
+                status.update(label=f"⚠️ No candidates found for '{layer_name}'", state="complete")
                 layer_sources.append({"layer": layer_name, "found": False, "title": None})
                 continue
 
@@ -253,7 +257,7 @@ if run_btn and prompt.strip():
                     break
 
             if not geojson or not chosen:
-                status.update(label=f"⚠️ Found candidates but no data in bbox for '{layer_name}'", state="complete")
+                status.update(label=f"⚠️ No data returned for '{layer_name}' — service may be down", state="complete")
                 layer_sources.append({"layer": layer_name, "found": False, "title": candidates[0]["title"] if candidates else None})
                 continue
 
