@@ -90,33 +90,33 @@ KNOWN_LAYERS = {
         ),
     ],
 
-    # ── FEMA NFHL via WFS (official OGC endpoint) ─────────────────────────────
+    # ── FEMA NFHL REST (layer 28 = Flood Hazard Areas, point-intersect query) ──
     "flood zones": [
         (
             "FEMA NFHL Flood Hazard Areas",
-            "https://hazards.fema.gov/arcgis/services/public/NFHL/MapServer/WFSServer",
-            "wfs:NFHL:S_Fld_Haz_Ar",
+            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
+            "point:4326",   # use point query at centroid, service returns WGS84
         ),
     ],
     "fema flood zones": [
         (
             "FEMA NFHL Flood Hazard Areas",
-            "https://hazards.fema.gov/arcgis/services/public/NFHL/MapServer/WFSServer",
-            "wfs:NFHL:S_Fld_Haz_Ar",
+            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
+            "point:4326",
         ),
     ],
     "fema flood": [
         (
             "FEMA NFHL Flood Hazard Areas",
-            "https://hazards.fema.gov/arcgis/services/public/NFHL/MapServer/WFSServer",
-            "wfs:NFHL:S_Fld_Haz_Ar",
+            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
+            "point:4326",
         ),
     ],
     "floodplain": [
         (
             "FEMA NFHL Flood Hazard Areas",
-            "https://hazards.fema.gov/arcgis/services/public/NFHL/MapServer/WFSServer",
-            "wfs:NFHL:S_Fld_Haz_Ar",
+            "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
+            "point:4326",
         ),
     ],
 }
@@ -228,7 +228,7 @@ def get_known_layer_candidates(layer_name: str) -> list[dict]:
     candidates = []
     for title, url, sr_or_typename in KNOWN_LAYERS[key]:
         if sr_or_typename.startswith("wfs:"):
-            typename = sr_or_typename[4:]  # strip "wfs:" prefix
+            typename = sr_or_typename[4:]
             candidates.append({
                 "title": title,
                 "query_url": url,
@@ -240,6 +240,19 @@ def get_known_layer_candidates(layer_name: str) -> list[dict]:
                 "sr": "4326",
                 "source": "known_catalog",
                 "source_type": "wfs",
+            })
+        elif sr_or_typename.startswith("point:"):
+            sr = sr_or_typename.split(":", 1)[1]
+            candidates.append({
+                "title": title,
+                "query_url": url,
+                "item_url": "",
+                "owner": "authoritative",
+                "views": 9999999,
+                "auth_score": 10,
+                "sr": sr,
+                "source": "known_catalog",
+                "source_type": "esri_point",   # use centroid point query
             })
         else:
             candidates.append({
@@ -257,6 +270,71 @@ def get_known_layer_candidates(layer_name: str) -> list[dict]:
 
 
 # ─── GeoJSON fetch ────────────────────────────────────────────────────────────
+
+def fetch_esri_point_query(query_url: str, lat: float, lon: float) -> Optional[dict]:
+    """
+    Query an ESRI REST layer using a point geometry (centroid of the geography).
+    Returns all features that spatially intersect that point.
+    This is the correct pattern for FEMA NFHL layer 28:
+      geometry=<lon,lat>&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects
+
+    Falls back to a small bbox (~5km) around the point if point query returns nothing.
+    """
+    base_params = {
+        "f": "geojson",
+        "where": "1=1",
+        "outFields": "*",
+        "outSR": "4326",
+        "returnGeometry": "true",
+        "resultRecordCount": 500,
+    }
+
+    def _try(params):
+        try:
+            resp = requests.get(query_url, params=params, timeout=25)
+            resp.raise_for_status()
+            data = resp.json()
+            if "error" not in data and data.get("features"):
+                return data
+        except Exception:
+            pass
+        return None
+
+    # Pass 1: exact point intersect
+    result = _try({
+        **base_params,
+        "geometry": f"{lon},{lat}",
+        "geometryType": "esriGeometryPoint",
+        "inSR": "4326",
+        "spatialRel": "esriSpatialRelIntersects",
+    })
+    if result:
+        return result
+
+    # Pass 2: small bbox (~0.05 deg ≈ 5km) around centroid
+    d = 0.05
+    result = _try({
+        **base_params,
+        "geometry": f"{lon-d},{lat-d},{lon+d},{lat+d}",
+        "geometryType": "esriGeometryEnvelope",
+        "inSR": "4326",
+        "spatialRel": "esriSpatialRelIntersects",
+    })
+    if result:
+        return result
+
+    # Pass 3: wider bbox (~0.5 deg)
+    d = 0.5
+    result = _try({
+        **base_params,
+        "geometry": f"{lon-d},{lat-d},{lon+d},{lat+d}",
+        "geometryType": "esriGeometryEnvelope",
+        "inSR": "4326",
+        "spatialRel": "esriSpatialRelIntersects",
+    })
+    return result
+
+
 
 def fetch_geojson(query_url: str, bbox: Optional[list], sr: str = "4326") -> Optional[dict]:
     """
