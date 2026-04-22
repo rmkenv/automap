@@ -3,30 +3,47 @@ agol_search.py — ArcGIS Online / REST layer discovery
 Searches for layers and extracts usable service URLs.
 """
 
-import math
 import requests
 from typing import Optional
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 
 
-# ─── WGS84 ↔ Web Mercator conversion ─────────────────────────────────────────
-# Needed because FEMA NFHL and Census TIGERweb use SR 102100 (Web Mercator)
+# ─── Coordinate transformation ───────────────────────────────────────────────
 
-def wgs84_to_webmercator(lon: float, lat: float) -> tuple[float, float]:
-    """Convert WGS84 lon/lat to Web Mercator x/y (EPSG:3857)."""
-    x = lon * 20037508.34 / 180
-    y = math.log(math.tan((90 + lat) * math.pi / 360)) / (math.pi / 180)
-    y = y * 20037508.34 / 180
-    return x, y
-
-
-def bbox_wgs84_to_webmercator(bbox: list) -> str:
-    """Convert [minx, miny, maxx, maxy] WGS84 bbox to Web Mercator string."""
+def _transform_bbox(bbox: list, target_wkid: int) -> tuple[str, str]:
+    """
+    Transform a WGS84 bbox to the target WKID.
+    Returns (geometry_string, inSR_string) ready for the ESRI REST query.
+    """
     minx, miny, maxx, maxy = bbox
-    x1, y1 = wgs84_to_webmercator(minx, miny)
-    x2, y2 = wgs84_to_webmercator(maxx, maxy)
-    return f"{x1},{y1},{x2},{y2}"
+
+    if target_wkid in (4326, 4269):
+        # Already WGS84 / NAD83 — pass through
+        return f"{minx},{miny},{maxx},{maxy}", "4326"
+
+    try:
+        from pyproj import Transformer
+        t = Transformer.from_crs("EPSG:4326", f"EPSG:{target_wkid}", always_xy=True)
+        x1, y1 = t.transform(minx, miny)
+        x2, y2 = t.transform(maxx, maxy)
+        return f"{x1},{y1},{x2},{y2}", str(target_wkid)
+    except Exception:
+        # pyproj failed — fall back to sending WGS84 with inSR=4326
+        # and let the server reproject (works for most ESRI services)
+        return f"{minx},{miny},{maxx},{maxy}", "4326"
+
+
+def _get_service_wkid(query_url: str) -> int:
+    """Fetch the service's native spatial reference WKID."""
+    base_url = query_url.replace("/query", "")
+    try:
+        resp = requests.get(base_url, params={"f": "json"}, timeout=10)
+        data = resp.json()
+        sr = data.get("spatialReference", {})
+        return int(sr.get("latestWkid") or sr.get("wkid") or 4326)
+    except Exception:
+        return 4326
 
 
 # ─── Known-good authoritative layer catalog ───────────────────────────────────
@@ -273,18 +290,17 @@ def get_known_layer_candidates(layer_name: str) -> list[dict]:
 def fetch_geojson(query_url: str, bbox: Optional[list], sr: str = "4326") -> Optional[dict]:
     """
     Query a REST service /query endpoint and return GeoJSON.
-    Handles both WGS84 and Web Mercator services correctly.
+    Auto-detects the service's native SR and reprojects the bbox accordingly.
 
-    Args:
-        query_url: Full /query endpoint URL
-        bbox: [minx, miny, maxx, maxy] in WGS84
-        sr: spatial reference of the service ("4326" or "102100")
+    Pass 1: bbox reprojected to service native SR
+    Pass 2: bbox sent as WGS84 with inSR=4326 (server reprojects)
+    Pass 3: no spatial filter (full layer)
     """
     base_params = {
         "f": "geojson",
         "where": "1=1",
         "outFields": "*",
-        "outSR": "4326",          # Always return WGS84 for Folium
+        "outSR": "4326",   # Always return WGS84 for Folium
         "resultRecordCount": 500,
     }
 
@@ -299,30 +315,35 @@ def fetch_geojson(query_url: str, bbox: Optional[list], sr: str = "4326") -> Opt
             pass
         return None
 
-    # Pass 1: with bbox in correct SR
     if bbox:
-        if sr == "102100":
-            geom_str = bbox_wgs84_to_webmercator(bbox)
-            geom_sr = "102100"
-        else:
-            minx, miny, maxx, maxy = bbox
-            geom_str = f"{minx},{miny},{maxx},{maxy}"
-            geom_sr = "4326"
-
-        spatial_params = {
+        # Pass 1: detect service SR and reproject bbox to it
+        service_wkid = _get_service_wkid(query_url)
+        geom_str, in_sr = _transform_bbox(bbox, service_wkid)
+        result = _try_fetch({
             **base_params,
             "geometry": geom_str,
             "geometryType": "esriGeometryEnvelope",
-            "inSR": geom_sr,
+            "inSR": in_sr,
             "spatialRel": "esriSpatialRelIntersects",
-        }
-        result = _try_fetch(spatial_params)
+        })
         if result:
             return result
 
-    # Pass 2: no spatial filter (full layer, let Folium clip visually)
-    result = _try_fetch(base_params)
-    return result
+        # Pass 2: send bbox as WGS84, let server reproject
+        if in_sr != "4326":
+            minx, miny, maxx, maxy = bbox
+            result = _try_fetch({
+                **base_params,
+                "geometry": f"{minx},{miny},{maxx},{maxy}",
+                "geometryType": "esriGeometryEnvelope",
+                "inSR": "4326",
+                "spatialRel": "esriSpatialRelIntersects",
+            })
+            if result:
+                return result
+
+    # Pass 3: no spatial filter — return full layer
+    return _try_fetch(base_params)
 
 
 def get_layer_info(query_url: str) -> Optional[dict]:

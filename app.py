@@ -397,26 +397,24 @@ def _render_map_and_controls(map_html: str, zoom_level: int):
                     "point_radius": cfg.get("point_radius", 6),
                 }
 
-    # Restyle button
+    # Restyle button — save configs + rebuild map HTML into session state, then rerun
     if st.button("🔄 Apply Styles", type="primary"):
         st.session_state["style_configs"] = updated_configs
         geo_info = st.session_state["geo_info"]
         basemap_key = st.session_state.get("basemap_key", "light")
+        zoom_level_stored = st.session_state.get("zoom_level", 10)
         try:
             fmap = build_map(
                 geo_info=geo_info,
                 layers=resolved_layers,
                 basemap_key=basemap_key,
-                zoom_start=zoom_level,
+                zoom_start=zoom_level_stored,
                 style_configs=updated_configs,
             )
-            new_html = map_to_html(fmap)
-            st.markdown("### 🗺 Restyled Map")
-            st.markdown('<div class="map-container">', unsafe_allow_html=True)
-            components.html(new_html, height=580, scrolling=False)
-            st.markdown("</div>", unsafe_allow_html=True)
+            st.session_state["map_html"] = map_to_html(fmap)
         except Exception as e:
             st.error(f"Restyle error: {e}")
+        st.rerun()
 
 
 
@@ -571,15 +569,21 @@ if run_btn and prompt.strip():
                 zoom_start=zoom_level,
                 style_configs=st.session_state["style_configs"],
             )
-            map_html = map_to_html(fmap)
+            st.session_state["map_html"] = map_to_html(fmap)
+            st.session_state["zoom_level"] = zoom_level
             status.update(label="✅ Map ready", state="complete")
         except Exception as e:
             status.update(label="❌ Map build failed", state="error")
             st.error(f"Map assembly error: {e}")
             st.stop()
 
-    _render_map_and_controls(map_html, zoom_level)
-
 
 elif run_btn and not prompt.strip():
     st.warning("Please enter a map description.")
+
+# ─── Always render map if we have one in session state ────────────────────────
+if st.session_state.get("map_html"):
+    _render_map_and_controls(
+        st.session_state["map_html"],
+        st.session_state.get("zoom_level", 10),
+    )
