@@ -47,6 +47,28 @@ def _get_service_wkid(query_url: str) -> int:
         return 4326
 
 
+# ─── Per-layer query filters ──────────────────────────────────────────────────
+# Applied as WHERE clause when fetching known catalog layers.
+# Keyed by a substring of the query_url for easy matching.
+
+LAYER_FILTERS = {
+    # Exclude Zone X (minimal hazard) — show only meaningful flood zones
+    "USA_Flood_Hazard_Reduced_Set_gdb": "FLD_ZONE NOT IN ('X') AND FLD_ZONE IS NOT NULL",
+    "FEMA_National_Flood_Hazard_Layer": "FLD_ZONE NOT IN ('X') AND FLD_ZONE IS NOT NULL",
+    "FEMA_Flood_Hazard/FeatureServer": "FLD_ZONE NOT IN ('X') AND FLD_ZONE IS NOT NULL",
+    "NFHL/MapServer/28": "FLD_ZONE NOT IN ('X') AND FLD_ZONE IS NOT NULL",
+    "Flooding/FeatureServer/1": "FLD_ZONE NOT IN ('X') AND FLD_ZONE IS NOT NULL",
+}
+
+
+def _get_layer_filter(query_url: str) -> str:
+    """Return a WHERE clause for the given URL, or '1=1' if none defined."""
+    for key, where in LAYER_FILTERS.items():
+        if key in query_url:
+            return where
+    return "1=1"
+
+
 # ─── Known-good authoritative layer catalog ───────────────────────────────────
 # Each entry: (title, query_url, spatial_reference)
 # spatial_reference: "4326" or "102100" (Web Mercator)
@@ -323,9 +345,10 @@ def fetch_esri_point_query(query_url: str, lat: float, lon: float) -> Optional[d
 
     Falls back to a small bbox (~5km) around the point if point query returns nothing.
     """
+    where_clause = _get_layer_filter(query_url)
     base_params = {
         "f": "geojson",
-        "where": "1=1",
+        "where": where_clause,
         "outFields": "*",
         "outSR": "4326",
         "returnGeometry": "true",
@@ -388,9 +411,10 @@ def fetch_geojson(query_url: str, bbox: Optional[list], sr: str = "4326") -> Opt
     Pass 2: bbox sent as WGS84 with inSR=4326 (server reprojects)
     Pass 3: no spatial filter (full layer)
     """
+    where_clause = _get_layer_filter(query_url)
     base_params = {
         "f": "geojson",
-        "where": "1=1",
+        "where": where_clause,
         "outFields": "*",
         "outSR": "4326",   # Always return WGS84 for Folium
         "resultRecordCount": 500,

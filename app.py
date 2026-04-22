@@ -9,7 +9,8 @@ import streamlit.components.v1 as components
 
 from llm import parse_map_intent, refine_layer_query
 from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson, fetch_wfs_geojson, fetch_esri_point_query, resolve_user_url
-from map_builder import build_map, map_to_html, assign_layer_colors, LAYER_COLORS, default_style_config, get_numeric_fields, get_all_fields, COLOR_RAMPS, FLOOD_ZONE_COLORS
+from map_builder import build_map, map_to_html, assign_layer_colors, LAYER_COLORS, default_style_config, get_numeric_fields, get_all_fields, get_string_fields, COLOR_RAMPS, FLOOD_ZONE_COLORS
+from dashboard import render_dashboard
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
 
@@ -680,7 +681,11 @@ elif run_btn and not prompt.strip():
 
 # ─── Always render map if we have one in session state ────────────────────────
 if st.session_state.get("map_html"):
-    _render_map_and_controls(
-        st.session_state["map_html"],
-        st.session_state.get("zoom_level", 10),
-    )
+    tab_map, tab_dash = st.tabs(["🗺 Map", "📊 Dashboard"])
+    with tab_map:
+        _render_map_and_controls(
+            st.session_state["map_html"],
+            st.session_state.get("zoom_level", 10),
+        )
+    with tab_dash:
+        render_dashboard()

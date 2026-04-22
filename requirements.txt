@@ -4,3 +4,4 @@ folium>=0.17.0
 requests>=2.31.0
 geopy>=2.4.0
 pyproj>=3.6.0
+plotly>=5.18.0
