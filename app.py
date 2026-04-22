@@ -141,11 +141,11 @@ with st.sidebar:
 
     st.markdown("### 📋 Example Prompts")
     examples = [
-        "Show me FEMA flood zones and census tracts in Baltimore, MD",
-        "Map hospitals and parks in Washington DC with a satellite basemap",
-        "Show superfund sites and low income areas in Detroit, MI",
-        "Give me wetlands and farmland in the Chesapeake Bay watershed",
-        "Show bike infrastructure and transit stops in Philadelphia, PA",
+        "Show me FEMA flood zones in Baltimore, MD",
+        "Show census tracts and counties in Washington, DC with a light basemap",
+        "Map flood zones and block groups in New Orleans, LA",
+        "Show census tracts in Chicago, IL with a dark basemap",
+        "Show FEMA flood zones and zip codes in Houston, TX",
     ]
     for ex in examples:
         if st.button(ex, key=f"ex_{ex[:20]}", use_container_width=True):

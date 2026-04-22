@@ -53,14 +53,44 @@ def _get_service_wkid(query_url: str) -> int:
 # query_url: the /query endpoint directly
 
 KNOWN_LAYERS = {
+    # ── Census Bureau TIGERweb (official, always public, no auth) ─────────────
     "census tracts": [
-        # Census TIGERweb — official Census Bureau REST service, always up
         (
-            "Census Tracts 2020 (TIGERweb)",
-            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/0/query",
+            "Census Tracts ACS 2024 (TIGERweb)",
+            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/4/query",
             "102100",
         ),
     ],
+    "block groups": [
+        (
+            "Census Block Groups ACS 2024 (TIGERweb)",
+            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/5/query",
+            "102100",
+        ),
+    ],
+    "counties": [
+        (
+            "US Counties (TIGERweb)",
+            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query",
+            "102100",
+        ),
+    ],
+    "zip codes": [
+        (
+            "ZIP Code Tabulation Areas (TIGERweb)",
+            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/PUMA_TAD_TAZ_UGA_ZCTA/MapServer/2/query",
+            "102100",
+        ),
+    ],
+    "places": [
+        (
+            "US Places / Cities (TIGERweb)",
+            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Places_CouSub_ConCity_SubMCD/MapServer/0/query",
+            "102100",
+        ),
+    ],
+
+    # ── FEMA NFHL via WFS (official OGC endpoint) ─────────────────────────────
     "flood zones": [
         (
             "FEMA NFHL Flood Hazard Areas",
@@ -82,91 +112,15 @@ KNOWN_LAYERS = {
             "wfs:NFHL:S_Fld_Haz_Ar",
         ),
     ],
-    "hospitals": [
+    "floodplain": [
         (
-            "USA Hospitals",
-            "https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/Hospitals_1/FeatureServer/0/query",
-            "4326",
-        ),
-    ],
-    "schools": [
-        (
-            "USA Public Schools",
-            "https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/Public_Schools_in_United_States/FeatureServer/0/query",
-            "4326",
-        ),
-    ],
-    "parks": [
-        (
-            "USA Parks",
-            "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Parks/FeatureServer/0/query",
-            "4326",
-        ),
-    ],
-    "superfund sites": [
-        (
-            "EPA Superfund NPL Sites",
-            "https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Superfund_NPL_Sites/FeatureServer/0/query",
-            "4326",
-        ),
-    ],
-    "wetlands": [
-        (
-            "National Wetlands Inventory (FWS)",
-            "https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/1/query",
-            "102100",
-        ),
-    ],
-    "counties": [
-        (
-            "USA Counties (TIGERweb)",
-            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query",
-            "102100",
-        ),
-    ],
-    "zip codes": [
-        (
-            "USA ZIP Code Areas (TIGERweb)",
-            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/PUMA_TAD_TAZ_UGA_ZCTA/MapServer/2/query",
-            "102100",
-        ),
-    ],
-    "transit stops": [
-        (
-            "USA Transit Stops",
-            "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Transit_Stops/FeatureServer/0/query",
-            "4326",
-        ),
-    ],
-    "power plants": [
-        (
-            "EIA Power Plants",
-            "https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Power_Plants_in_United_States/FeatureServer/0/query",
-            "4326",
-        ),
-    ],
-    "low income": [
-        (
-            "HUD Low-to-Moderate Income Areas",
-            "https://services.arcgis.com/VTyQ9soqVukalItT/arcgis/rest/services/Low_to_Moderate_Income_Population_by_Tract/FeatureServer/0/query",
-            "4326",
-        ),
-    ],
-    "farmland": [
-        (
-            "USA Cropland (USDA/NASS)",
-            "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_cropland/FeatureServer/0/query",
-            "4326",
-        ),
-    ],
-    "block groups": [
-        (
-            "Census Block Groups (TIGERweb)",
-            "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/1/query",
-            "102100",
+            "FEMA NFHL Flood Hazard Areas",
+            "https://hazards.fema.gov/arcgis/services/public/NFHL/MapServer/WFSServer",
+            "wfs:NFHL:S_Fld_Haz_Ar",
         ),
     ],
 }
+
 
 
 def _normalize_layer_key(layer_name: str) -> Optional[str]:
