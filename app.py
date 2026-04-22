@@ -8,7 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from llm import parse_map_intent, refine_layer_query
-from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson, resolve_user_url
+from agol_search import geocode_place, search_agol_layers, get_known_layer_candidates, get_layer_info, fetch_geojson, fetch_wfs_geojson, resolve_user_url
 from map_builder import build_map, map_to_html, assign_layer_colors, LAYER_COLORS, default_style_config, get_numeric_fields, get_all_fields, COLOR_RAMPS, FLOOD_ZONE_COLORS
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
@@ -501,7 +501,10 @@ if run_btn and prompt.strip():
     # Add user URL layers directly to resolved_layers (bypass LLM layer matching)
     for label, candidate in user_url_candidates.items():
         color = LAYER_COLORS[len(resolved_layers) % len(LAYER_COLORS)]
-        gj = fetch_geojson(candidate["query_url"], bbox=geo_info["bbox"])
+        if candidate.get("source_type") == "wfs":
+            gj = fetch_wfs_geojson(candidate["query_url"], bbox=geo_info["bbox"], typename=candidate.get("wfs_typename", ""))
+        else:
+            gj = fetch_geojson(candidate["query_url"], bbox=geo_info["bbox"])
         if gj and gj.get("features"):
             resolved_layers.append({
                 "title": candidate["title"],
@@ -554,12 +557,20 @@ if run_btn and prompt.strip():
             layer_info = None
 
             for candidate in candidates:
-                info = get_layer_info(candidate["query_url"])
-                gj = fetch_geojson(
-                    candidate["query_url"],
-                    bbox=geo_info["bbox"],
-                    sr=candidate.get("sr", "4326"),
-                )
+                if candidate.get("source_type") == "wfs":
+                    gj = fetch_wfs_geojson(
+                        candidate["query_url"],
+                        bbox=geo_info["bbox"],
+                        typename=candidate["wfs_typename"],
+                    )
+                    info = {"geometry_type": "esriGeometryPolygon", "fields": [], "name": candidate["title"]}
+                else:
+                    info = get_layer_info(candidate["query_url"])
+                    gj = fetch_geojson(
+                        candidate["query_url"],
+                        bbox=geo_info["bbox"],
+                        sr=candidate.get("sr", "4326"),
+                    )
                 if gj and gj.get("features"):
                     geojson = gj
                     chosen = candidate

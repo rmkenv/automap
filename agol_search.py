@@ -4,6 +4,7 @@ Searches for layers and extracts usable service URLs.
 """
 
 import requests
+import json
 from typing import Optional
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
@@ -62,23 +63,23 @@ KNOWN_LAYERS = {
     ],
     "flood zones": [
         (
-            "FEMA Flood Zones (FloodZones FeatureServer)",
-            "https://services6.arcgis.com/am689ZyfXfdo9vCK/arcgis/rest/services/Flooding/FeatureServer/1/query",
-            "4326",
+            "FEMA NFHL Flood Hazard Areas",
+            "https://hazards.fema.gov/arcgis/services/public/NFHL/MapServer/WFSServer",
+            "wfs:NFHL:S_Fld_Haz_Ar",
         ),
     ],
     "fema flood zones": [
         (
-            "FEMA Flood Zones (FloodZones FeatureServer)",
-            "https://services6.arcgis.com/am689ZyfXfdo9vCK/arcgis/rest/services/Flooding/FeatureServer/1/query",
-            "4326",
+            "FEMA NFHL Flood Hazard Areas",
+            "https://hazards.fema.gov/arcgis/services/public/NFHL/MapServer/WFSServer",
+            "wfs:NFHL:S_Fld_Haz_Ar",
         ),
     ],
     "fema flood": [
         (
-            "FEMA Flood Zones (FloodZones FeatureServer)",
-            "https://services6.arcgis.com/am689ZyfXfdo9vCK/arcgis/rest/services/Flooding/FeatureServer/1/query",
-            "4326",
+            "FEMA NFHL Flood Hazard Areas",
+            "https://hazards.fema.gov/arcgis/services/public/NFHL/MapServer/WFSServer",
+            "wfs:NFHL:S_Fld_Haz_Ar",
         ),
     ],
     "hospitals": [
@@ -270,19 +271,35 @@ def get_known_layer_candidates(layer_name: str) -> list[dict]:
     key = _normalize_layer_key(layer_name)
     if not key:
         return []
-    return [
-        {
-            "title": title,
-            "query_url": query_url,
-            "item_url": "",
-            "owner": "authoritative",
-            "views": 9999999,
-            "auth_score": 10,
-            "sr": sr,
-            "source": "known_catalog",
-        }
-        for title, query_url, sr in KNOWN_LAYERS[key]
-    ]
+    candidates = []
+    for title, url, sr_or_typename in KNOWN_LAYERS[key]:
+        if sr_or_typename.startswith("wfs:"):
+            typename = sr_or_typename[4:]  # strip "wfs:" prefix
+            candidates.append({
+                "title": title,
+                "query_url": url,
+                "wfs_typename": typename,
+                "item_url": "",
+                "owner": "authoritative",
+                "views": 9999999,
+                "auth_score": 10,
+                "sr": "4326",
+                "source": "known_catalog",
+                "source_type": "wfs",
+            })
+        else:
+            candidates.append({
+                "title": title,
+                "query_url": url,
+                "item_url": "",
+                "owner": "authoritative",
+                "views": 9999999,
+                "auth_score": 10,
+                "sr": sr_or_typename,
+                "source": "known_catalog",
+                "source_type": "esri",
+            })
+    return candidates
 
 
 # ─── GeoJSON fetch ────────────────────────────────────────────────────────────
@@ -362,46 +379,171 @@ def get_layer_info(query_url: str) -> Optional[dict]:
         return None
 
 
+
+# ─── WFS client ───────────────────────────────────────────────────────────────
+
+def fetch_wfs_geojson(wfs_url: str, bbox: Optional[list], typename: str) -> Optional[dict]:
+    """
+    Query an OGC WFS endpoint and return GeoJSON.
+    Tries WFS 2.0.0 then 1.1.0. bbox must be [minx, miny, maxx, maxy] in WGS84.
+
+    Args:
+        wfs_url:  Base WFS URL (ending in WFSServer or similar)
+        bbox:     [minx, miny, maxx, maxy] WGS84
+        typename: WFS layer name e.g. 'NFHL:S_Fld_Haz_Ar'
+    """
+    import xml.etree.ElementTree as ET
+
+    def _geojson_from_features(features: list) -> Optional[dict]:
+        if not features:
+            return None
+        return {"type": "FeatureCollection", "features": features}
+
+    def _parse_wfs_geojson_response(resp_text: str) -> Optional[dict]:
+        """Try to parse WFS response as GeoJSON directly."""
+        try:
+            data = json.loads(resp_text)
+            if data.get("features") is not None:
+                return data if data.get("features") else None
+        except Exception:
+            pass
+        return None
+
+    def _try_wfs(version: str) -> Optional[dict]:
+        if bbox:
+            minx, miny, maxx, maxy = bbox
+            # WFS 2.0: bbox param is miny,minx,maxy,maxx with CRS appended
+            if version == "2.0.0":
+                bbox_str = f"{miny},{minx},{maxy},{maxx},urn:ogc:def:crs:EPSG::4326"
+            else:
+                bbox_str = f"{minx},{miny},{maxx},{maxy},EPSG:4326"
+        else:
+            bbox_str = None
+
+        params = {
+            "service": "WFS",
+            "version": version,
+            "request": "GetFeature",
+            "typeName": typename,
+            "outputFormat": "application/json",
+            "srsName": "EPSG:4326",
+            "count" if version == "2.0.0" else "maxFeatures": 500,
+        }
+        if bbox_str:
+            params["bbox"] = bbox_str
+
+        try:
+            resp = requests.get(wfs_url, params=params, timeout=30)
+            if resp.status_code != 200:
+                return None
+            return _parse_wfs_geojson_response(resp.text)
+        except Exception:
+            return None
+
+    # Try WFS 2.0.0 first, fall back to 1.1.0
+    result = _try_wfs("2.0.0")
+    if result:
+        return result
+    result = _try_wfs("1.1.0")
+    if result:
+        return result
+
+    # Last resort: no bbox
+    if bbox:
+        params_nofilter = {
+            "service": "WFS",
+            "version": "2.0.0",
+            "request": "GetFeature",
+            "typeName": typename,
+            "outputFormat": "application/json",
+            "srsName": "EPSG:4326",
+            "count": 500,
+        }
+        try:
+            resp = requests.get(wfs_url, params=params_nofilter, timeout=30)
+            return _parse_wfs_geojson_response(resp.text)
+        except Exception:
+            pass
+
+    return None
+
+
+def get_wfs_typenames(wfs_url: str) -> list[str]:
+    """Fetch available layer names from a WFS GetCapabilities response."""
+    import xml.etree.ElementTree as ET
+    params = {"service": "WFS", "version": "2.0.0", "request": "GetCapabilities"}
+    try:
+        resp = requests.get(wfs_url, params=params, timeout=15)
+        root = ET.fromstring(resp.text)
+        ns = {"wfs": "http://www.opengis.net/wfs/2.0"}
+        names = [el.text for el in root.findall(".//wfs:Name", ns)]
+        if not names:
+            # Try without namespace
+            names = [el.text for el in root.iter() if el.tag.endswith("Name") and el.text and ":" in el.text]
+        return names
+    except Exception:
+        return []
+
 # ─── User-supplied URL resolver ───────────────────────────────────────────────
 
 def resolve_user_url(raw_url: str) -> Optional[dict]:
     """
-    Accept any ArcGIS REST URL a user pastes and return a normalised candidate dict.
+    Accept any ArcGIS REST or WFS URL a user pastes and return a normalised candidate dict.
     Handles:
-      - .../FeatureServer              → appends /0/query
-      - .../FeatureServer/1            → appends /query
-      - .../FeatureServer/1/query      → used as-is
-      - .../MapServer                  → appends /0/query
-      - .../MapServer/28               → appends /query
-      - .../MapServer/28/query         → used as-is
-      - URLs with ?f=pjson or other params → strips params first
-    Returns a candidate dict compatible with the rest of the pipeline, or None.
+      - WFSServer URLs → WFS source_type, prompts for typename
+      - .../FeatureServer[/N][/query]  → ESRI REST
+      - .../MapServer[/N][/query]      → ESRI REST
+      - URLs with ?f=pjson etc.        → strips params first
     """
-    # Strip query params
     url = raw_url.strip().split("?")[0].rstrip("/")
 
-    # Already ends in /query
+    # ── WFS endpoint ──────────────────────────────────────────────────────────
+    if "WFSServer" in url:
+        # Try to get available typenames
+        typenames = get_wfs_typenames(url)
+        # Default to first typename containing "Fld_Haz" or just first one
+        typename = next((t for t in typenames if "Fld_Haz" in t or "flood" in t.lower()), None)
+        if not typename and typenames:
+            typename = typenames[0]
+        if not typename:
+            typename = "NFHL:S_Fld_Haz_Ar"  # sensible default for FEMA
+
+        parts = url.split("/")
+        title = " / ".join(p for p in parts[-3:] if p)
+        return {
+            "title": f"WFS: {typename}",
+            "query_url": url,
+            "wfs_typename": typename,
+            "item_url": "",
+            "owner": "user-supplied",
+            "views": 0,
+            "auth_score": 0,
+            "sr": "4326",
+            "source": "user_url",
+            "source_type": "wfs",
+            "geometry_type": "esriGeometryPolygon",
+            "fields": [],
+            "snippet": f"WFS layer {typename} from {url}",
+        }
+
+    # ── ESRI REST endpoint ────────────────────────────────────────────────────
     if url.endswith("/query"):
         query_url = url
     else:
-        # Check if last segment is a layer index (digit)
         parts = url.split("/")
         last = parts[-1]
         if last.isdigit():
             query_url = url + "/query"
         elif any(svc in url for svc in ("FeatureServer", "MapServer")):
-            # Bare service root — append /0/query
             query_url = url + "/0/query"
         else:
             return None
 
-    # Validate by fetching metadata
     info = get_layer_info(query_url)
     if info is None:
         return None
 
-    # Derive a display title from the URL
-    parts = query_url.rstrip("/query").split("/")
+    parts = query_url.replace("/query", "").split("/")
     title = info.get("name") or "/".join(parts[-3:])
 
     return {
@@ -411,8 +553,9 @@ def resolve_user_url(raw_url: str) -> Optional[dict]:
         "owner": "user-supplied",
         "views": 0,
         "auth_score": 0,
-        "sr": "4326",   # fetch_geojson auto-detects; this is just a fallback hint
+        "sr": "4326",
         "source": "user_url",
+        "source_type": "esri",
         "geometry_type": info.get("geometry_type", "esriGeometryPolygon"),
         "fields": info.get("fields", []),
         "snippet": f"User-supplied layer: {query_url}",
